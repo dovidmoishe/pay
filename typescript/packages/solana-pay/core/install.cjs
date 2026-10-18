@@ -5,7 +5,8 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const { createHash } = require('crypto');
-const { execFileSync, execSync } = require('child_process');
+const childProcess = require('child_process');
+const { execSync } = childProcess;
 const { getPlatform } = require('./platform.cjs');
 
 const pkg = require('./package.json');
@@ -93,7 +94,7 @@ function extractZip(artifactPath, destDir) {
         extractZipWindows(artifactPath, destDir);
         return;
     }
-    execSync(`unzip -o "${artifactPath}" -d "${destDir}"`, { stdio: 'inherit' });
+    childProcess.execSync(`unzip -o "${artifactPath}" -d "${destDir}"`, { stdio: 'inherit' });
 }
 
 /**
@@ -101,21 +102,16 @@ function extractZip(artifactPath, destDir) {
  * @param {string} destDir
  */
 function extractZipWindows(artifactPath, destDir) {
-    const systemRoot = process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows';
-    const tar = [
-        path.join(systemRoot, 'System32', 'tar.exe'),
-        // 32-bit Node on 64-bit Windows: System32 is redirected to SysWOW64.
-        path.join(systemRoot, 'Sysnative', 'tar.exe'),
-    ].find(candidate => fs.existsSync(candidate));
+    const tar = windowsTarCandidates(process.env).find(candidate => fs.existsSync(candidate));
 
     if (tar) {
-        execFileSync(tar, ['-xf', artifactPath, '-C', destDir], { stdio: 'inherit' });
+        childProcess.execFileSync(tar, ['-xf', artifactPath, '-C', destDir], { stdio: 'inherit' });
         return;
     }
 
-    const quotedArtifact = artifactPath.replace(/'/g, "''");
-    const quotedDest = destDir.replace(/'/g, "''");
-    execFileSync(
+    const quotedArtifact = quotePowerShellLiteral(artifactPath);
+    const quotedDest = quotePowerShellLiteral(destDir);
+    childProcess.execFileSync(
         'powershell.exe',
         [
             '-NoProfile',
@@ -125,6 +121,27 @@ function extractZipWindows(artifactPath, destDir) {
         ],
         { stdio: 'inherit' },
     );
+}
+
+/**
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {string[]}
+ */
+function windowsTarCandidates(env) {
+    const systemRoot = (env && (env.SystemRoot || env.WINDIR)) || 'C:\\Windows';
+    return [
+        path.join(systemRoot, 'System32', 'tar.exe'),
+        // 32-bit Node on 64-bit Windows: System32 is redirected to SysWOW64.
+        path.join(systemRoot, 'Sysnative', 'tar.exe'),
+    ];
+}
+
+/**
+ * @param {string} value
+ * @returns {string}
+ */
+function quotePowerShellLiteral(value) {
+    return value.replace(/'/g, "''");
 }
 
 /**
@@ -169,9 +186,17 @@ function sha256File(filePath) {
     return createHash('sha256').update(data).digest('hex');
 }
 
-try {
-    main();
-} catch (err) {
-    console.error(`Failed to install pay binary: ${err.message}`);
-    process.exit(1);
+if (require.main === module) {
+    try {
+        main();
+    } catch (err) {
+        console.error(`Failed to install pay binary: ${err.message}`);
+        process.exit(1);
+    }
 }
+
+module.exports = {
+    extractZipWindows,
+    quotePowerShellLiteral,
+    windowsTarCandidates,
+};
